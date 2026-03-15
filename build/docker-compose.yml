@@ -1,0 +1,65 @@
+# ============================================
+# ClusterApp Backend — Docker Compose
+# ============================================
+
+services:
+  # ------------- FastAPI Backend -------------
+  app:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    container_name: backend
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-clusterapp}:${POSTGRES_PASSWORD:-clusterapp}@db:5432/${POSTGRES_DB:-clusterapp}
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app  # hot-reload в dev-режиме
+
+  # -------------- PostgreSQL ----------------
+  db:
+    image: postgres:16-alpine
+    container_name: db
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-clusterapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clusterapp}
+      POSTGRES_DB: ${POSTGRES_DB:-clusterapp}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clusterapp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ------------------ Redis -----------------
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
