@@ -1,0 +1,9 @@
+*.csv
+.env
+__pycache__
+*.pyc
+venv
+.venv
+.mypy_cache
+.pytest_cache
+static/plots/
