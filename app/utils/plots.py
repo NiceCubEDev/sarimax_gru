@@ -1,13 +1,9 @@
-"""
-ClusterApp Backend — утилиты для построения графиков.
-"""
-
 import uuid
 
 import matplotlib
 
 
-matplotlib.use("Agg")  # non-interactive backend
+matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -108,3 +104,20 @@ def plot_acf_pacf(series: np.ndarray, lags: int = 40, title: str = "ACF / PACF")
 
     fig.tight_layout()
     return _save_figure(fig, "acf_pacf")
+
+
+def plot_training_loss(
+    losses: list[float],
+    title: str = "Кривая обучения GRU",
+) -> str:
+    """График loss по эпохам."""
+    fig, ax = plt.subplots(figsize=(10, 5))
+    epochs = range(1, len(losses) + 1)
+    ax.plot(epochs, losses, color="#9C27B0", linewidth=1.5, label="Train Loss (MSE)")
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xlabel("Эпоха")
+    ax.set_ylabel("Loss")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    return _save_figure(fig, "training_loss")
+

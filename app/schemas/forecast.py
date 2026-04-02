@@ -9,7 +9,7 @@ class ForecastRequest(BaseModel):
     """Запрос на прогнозирование."""
 
     store_id: int
-    horizon: int = 12  # недель вперёд
+    horizon: int = 12
 
 
 class StationarityResult(BaseModel):
@@ -46,6 +46,7 @@ class ForecastPlots(BaseModel):
     forecast_url: str
     residuals_url: str | None = None
     acf_pacf_url: str | None = None
+    training_loss_url: str | None = None
 
 
 class SarimaxResponse(BaseModel):
@@ -58,3 +59,25 @@ class SarimaxResponse(BaseModel):
     test_forecast: list[ForecastPoint]
     metrics: ModelMetrics
     plots: ForecastPlots
+
+
+class GruHyperparams(BaseModel):
+    """Гиперпараметры GRU-модели."""
+
+    hidden_size: int
+    num_layers: int
+    epochs_trained: int
+    learning_rate: float
+    sequence_length: int
+    features: list[str]
+
+
+class GruResponse(BaseModel):
+    """Полный ответ GRU: гиперпараметры, прогнозы, метрики, графики."""
+
+    hyperparams: GruHyperparams
+    train_forecast: list[ForecastPoint]
+    test_forecast: list[ForecastPoint]
+    metrics: ModelMetrics
+    plots: ForecastPlots
+

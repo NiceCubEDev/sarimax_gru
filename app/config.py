@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     sarimax_train_ratio: float = 0.8
     sarimax_default_horizon: int = 12
 
+    # --- GRU defaults ---
+    gru_hidden_size: int = 64
+    gru_num_layers: int = 2
+    gru_epochs: int = 100
+    gru_learning_rate: float = 0.001
+    gru_sequence_length: int = 12  # окно (кол-во недель)
+    gru_train_ratio: float = 0.8
+
     # --- Static files (graphs) ---
     plots_dir: str = "static/plots"
 

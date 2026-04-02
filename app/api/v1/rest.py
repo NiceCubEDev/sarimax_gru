@@ -4,8 +4,9 @@ ClusterApp Backend — API v1 роуты.
 
 from fastapi import APIRouter, HTTPException
 
+from app.analytics.gru import run_gru_pipeline
 from app.analytics.sarimax import run_sarimax_pipeline
-from app.schemas.forecast import ForecastRequest, SarimaxResponse
+from app.schemas.forecast import ForecastRequest, GruResponse, SarimaxResponse
 from app.schemas.store import SalesRecord, StoreAggregate
 from app.service.data_loader import data_loader
 
@@ -67,5 +68,26 @@ async def forecast_sarimax(request: ForecastRequest):
         result = run_sarimax_pipeline(store_df, horizon=request.horizon, store_id=request.store_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка SARIMAX: {e}") from e
+
+    return result
+
+
+@router.post("/forecast/gru", response_model=GruResponse)
+async def forecast_gru(request: ForecastRequest):
+    """
+    Полный GRU-пайплайн (многомерный вход):
+    подготовка данных → обучение → постпрогноз → прогноз → графики.
+    """
+    try:
+        store_df = data_loader.get_store_data(request.store_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    try:
+        result = run_gru_pipeline(
+            store_df, horizon=request.horizon, store_id=request.store_id,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка GRU: {e}") from e
 
     return result

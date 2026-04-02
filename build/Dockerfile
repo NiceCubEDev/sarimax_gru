@@ -15,8 +15,10 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc && \
     rm -rf /var/lib/apt/lists/*
 
+# Устанавливаем зависимости в системный Python (без venv)
+ENV UV_SYSTEM_PYTHON=1
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv pip install --requirement pyproject.toml
 
 # ------------- PRODUCTION STAGE -------------
 FROM python:3.12-slim AS production

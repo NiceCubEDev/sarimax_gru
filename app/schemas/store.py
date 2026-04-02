@@ -1,12 +1,7 @@
-"""
-ClusterApp Backend — Pydantic-схемы для магазинов.
-"""
-
 from pydantic import BaseModel
 
 
 class SalesRecord(BaseModel):
-    """Запись из CSV — одна неделя одного магазина."""
 
     store: int
     date: str
@@ -19,7 +14,6 @@ class SalesRecord(BaseModel):
 
 
 class StoreAggregate(BaseModel):
-    """Агрегированные метрики магазина."""
 
     store_id: int
     mean_sales: float
