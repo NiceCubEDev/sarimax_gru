@@ -12,6 +12,7 @@ ClusterApp Backend — SARIMAX аналитический модуль.
 8. Графики
 """
 
+import itertools
 import warnings
 
 import numpy as np
@@ -34,6 +35,7 @@ from app.utils.plots import (
     plot_time_series,
 )
 
+
 # Кэш результатов: ключ (store_id, horizon) → SarimaxResponse
 _cache: dict[tuple[int, int], SarimaxResponse] = {}
 
@@ -46,7 +48,7 @@ def check_stationarity(series: pd.Series, max_diff: int = 2) -> StationarityResu
     diff_order = 0
     current = series.dropna()
 
-    for d in range(max_diff + 1):
+    for _d in range(max_diff + 1):
         result = adfuller(current, autolag="AIC")
         adf_stat, p_value = result[0], result[1]
 
@@ -70,6 +72,38 @@ def check_stationarity(series: pd.Series, max_diff: int = 2) -> StationarityResu
     )
 
 
+def _fit_seasonal_variants(
+    series: pd.Series,
+    p: int,
+    d: int,
+    q: int,
+    seasonal_period: int,
+    best_aic: float,
+    best_order: tuple[int, int, int],
+    best_seasonal: tuple[int, int, int, int],
+) -> tuple[float, tuple[int, int, int], tuple[int, int, int, int]]:
+    """Перебор сезонных параметров (P, Q) для фиксированных (p, d, q)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for P, Q in itertools.product(range(2), range(2)):
+            try:
+                model = SARIMAX(
+                    series,
+                    order=(p, d, q),
+                    seasonal_order=(P, 0, Q, seasonal_period),
+                    enforce_stationarity=False,
+                    enforce_invertibility=False,
+                )
+                fitted = model.fit(disp=False, maxiter=50)
+                if fitted.aic < best_aic:
+                    best_aic = fitted.aic
+                    best_order = (p, d, q)
+                    best_seasonal = (P, 0, Q, seasonal_period)
+            except Exception:
+                continue
+    return best_aic, best_order, best_seasonal
+
+
 def _select_order(
     series: pd.Series,
     d: int,
@@ -90,25 +124,10 @@ def _select_order(
         for q in range(max_q + 1):
             if p == 0 and q == 0:
                 continue
-            for P in range(2):
-                for Q in range(2):
-                    try:
-                        with warnings.catch_warnings():
-                            warnings.simplefilter("ignore")
-                            model = SARIMAX(
-                                series,
-                                order=(p, d, q),
-                                seasonal_order=(P, 0, Q, seasonal_period),
-                                enforce_stationarity=False,
-                                enforce_invertibility=False,
-                            )
-                            fitted = model.fit(disp=False, maxiter=50)
-                            if fitted.aic < best_aic:
-                                best_aic = fitted.aic
-                                best_order = (p, d, q)
-                                best_seasonal = (P, 0, Q, seasonal_period)
-                    except Exception:
-                        continue
+            best_aic, best_order, best_seasonal = _fit_seasonal_variants(
+                series, p, d, q, seasonal_period,
+                best_aic, best_order, best_seasonal,
+            )
 
     return best_order, best_seasonal
 
@@ -124,7 +143,10 @@ def _compute_metrics(actual: np.ndarray, predicted: np.ndarray) -> ModelMetrics:
     # MAPE с защитой от деления на 0
     nonzero = actual != 0
     if nonzero.any():
-        mape = float(np.mean(np.abs((actual[nonzero] - predicted[nonzero]) / actual[nonzero])) * 100)
+        abs_pct_error = np.abs(
+            (actual[nonzero] - predicted[nonzero]) / actual[nonzero]
+        )
+        mape = float(np.mean(abs_pct_error) * 100)
     else:
         mape = 0.0
 
@@ -210,7 +232,11 @@ def run_sarimax_pipeline(
     for i in range(len(test), forecast_steps):
         test_forecast.append(
             ForecastPoint(
-                date=str(forecast_mean.index[i].date()) if hasattr(forecast_mean.index[i], "date") else str(forecast_mean.index[i]),
+                date=(
+                    str(forecast_mean.index[i].date())
+                    if hasattr(forecast_mean.index[i], "date")
+                    else str(forecast_mean.index[i])
+                ),
                 actual=None,
                 predicted=float(forecast_mean.iloc[i]),
                 lower_ci=float(forecast_ci.iloc[i, 0]),
@@ -220,11 +246,11 @@ def run_sarimax_pipeline(
 
     # --- 8. Метрики (на test) ---
     test_actual = test.values
-    test_predicted = forecast_mean.iloc[:len(test)].values
+    test_predicted = forecast_mean.iloc[: len(test)].values
     metrics = _compute_metrics(test_actual, test_predicted)
 
     # --- 9. Графики ---
-    ts_url = plot_time_series(series.index, series.values, title=f"Магазин — Weekly Sales")
+    ts_url = plot_time_series(series.index, series.values, title="Магазин — Weekly Sales")
 
     forecast_url = plot_forecast(
         train_dates=train.index,
@@ -232,8 +258,8 @@ def run_sarimax_pipeline(
         test_dates=test.index,
         test_actual=test.values,
         test_predicted=test_predicted,
-        lower_ci=forecast_ci.iloc[:len(test), 0].values,
-        upper_ci=forecast_ci.iloc[:len(test), 1].values,
+        lower_ci=forecast_ci.iloc[: len(test), 0].values,
+        upper_ci=forecast_ci.iloc[: len(test), 1].values,
         title=f"SARIMAX{order}x{seasonal_order}",
     )
 

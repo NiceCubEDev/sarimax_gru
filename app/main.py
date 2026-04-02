@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.config import settings
 from app.api.v1.rest import router as api_router
+from app.config import settings
 from app.service.data_loader import data_loader
 
 

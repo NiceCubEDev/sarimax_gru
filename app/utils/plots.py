@@ -3,12 +3,13 @@ ClusterApp Backend — утилиты для построения графико
 """
 
 import uuid
-from pathlib import Path
 
 import matplotlib
+
+
 matplotlib.use("Agg")  # non-interactive backend
-import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
@@ -62,7 +63,9 @@ def plot_forecast(
     ax.plot(test_dates, test_actual, color="#4CAF50", linewidth=1.5, label="Test (факт)")
 
     # Test — прогноз
-    ax.plot(test_dates, test_predicted, color="#FF5722", linewidth=1.5, linestyle="--", label="Прогноз")
+    ax.plot(
+        test_dates, test_predicted, color="#FF5722", linewidth=1.5, linestyle="--", label="Прогноз"
+    )
 
     # Доверительный интервал
     if lower_ci is not None and upper_ci is not None:

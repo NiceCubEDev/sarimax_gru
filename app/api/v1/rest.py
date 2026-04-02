@@ -4,10 +4,11 @@ ClusterApp Backend — API v1 роуты.
 
 from fastapi import APIRouter, HTTPException
 
+from app.analytics.sarimax import run_sarimax_pipeline
 from app.schemas.forecast import ForecastRequest, SarimaxResponse
 from app.schemas.store import SalesRecord, StoreAggregate
 from app.service.data_loader import data_loader
-from app.analytics.sarimax import run_sarimax_pipeline
+
 
 router = APIRouter(prefix="/api/v1", tags=["API v1"])
 
@@ -28,7 +29,7 @@ async def get_store_sales(store_id: int):
     try:
         store_df = data_loader.get_store_data(store_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     store_df = store_df.reset_index()
     records = []
@@ -60,11 +61,11 @@ async def forecast_sarimax(request: ForecastRequest):
     try:
         store_df = data_loader.get_store_data(request.store_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     try:
         result = run_sarimax_pipeline(store_df, horizon=request.horizon, store_id=request.store_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка SARIMAX: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка SARIMAX: {e}") from e
 
     return result

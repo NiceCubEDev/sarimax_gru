@@ -47,14 +47,19 @@ class DataLoader:
     def get_store_aggregates(self) -> pd.DataFrame:
         """Агрегированные метрики по магазинам."""
         df = self.load()
-        agg = df.groupby("Store").agg(
-            mean_sales=("Weekly_Sales", "mean"),
-            std_sales=("Weekly_Sales", "std"),
-            mean_temperature=("Temperature", "mean"),
-            mean_cpi=("CPI", "mean"),
-            mean_unemployment=("Unemployment", "mean"),
-            mean_fuel_price=("Fuel_Price", "mean"),
-        ).reset_index()
+        agg = (
+            df
+            .groupby("Store")
+            .agg(
+                mean_sales=("Weekly_Sales", "mean"),
+                std_sales=("Weekly_Sales", "std"),
+                mean_temperature=("Temperature", "mean"),
+                mean_cpi=("CPI", "mean"),
+                mean_unemployment=("Unemployment", "mean"),
+                mean_fuel_price=("Fuel_Price", "mean"),
+            )
+            .reset_index()
+        )
         agg = agg.rename(columns={"Store": "store_id"})
         return agg
 

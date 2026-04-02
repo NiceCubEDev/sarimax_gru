@@ -7,21 +7,16 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /tmp
 
-# Poetry
-ENV POETRY_VERSION=1.8.2 \
-    POETRY_HOME="/opt/poetry" \
-    POETRY_NO_INTERACTION=1 \
-    POETRY_VIRTUALENVS_CREATE=false
-
-RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
+# uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Системные зависимости для сборки Python-пакетов
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc && \
     rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml poetry.lock ./
-RUN poetry install --no-root --only main --no-cache
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 # ------------- PRODUCTION STAGE -------------
 FROM python:3.12-slim AS production

@@ -6,4 +6,5 @@ venv
 .venv
 .mypy_cache
 .pytest_cache
+.ruff_cache
 static/plots/

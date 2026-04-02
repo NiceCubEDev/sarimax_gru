@@ -52,8 +52,8 @@ class SarimaxResponse(BaseModel):
     """Полный ответ SARIMAX: стационарность, параметры, прогнозы, метрики, графики."""
 
     stationarity: StationarityResult
-    order: list[int]             # [p, d, q]
-    seasonal_order: list[int]    # [P, D, Q, s]
+    order: list[int]  # [p, d, q]
+    seasonal_order: list[int]  # [P, D, Q, s]
     train_forecast: list[ForecastPoint]
     test_forecast: list[ForecastPoint]
     metrics: ModelMetrics

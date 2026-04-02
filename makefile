@@ -60,6 +60,26 @@ db-shell:
 redis-cli:
 	$(COMPOSE) exec redis redis-cli
 
+# --------------- Lint / Format ---------------
+
+.PHONY: lint lint-fix fmt fmt-check
+
+## Проверка кода (ruff check)
+lint:
+	uv run ruff check app/
+
+## Автоисправление ошибок линтера
+lint-fix:
+	uv run ruff check app/ --fix
+
+## Форматирование кода
+fmt:
+	uv run ruff format app/
+
+## Проверка форматирования (без изменений)
+fmt-check:
+	uv run ruff format app/ --check
+
 # --------------- Help ----------------------
 
 .PHONY: help
@@ -79,4 +99,8 @@ help:
 	@echo "  make shell       — Shell в backend"
 	@echo "  make db-shell    — psql в PostgreSQL"
 	@echo "  make redis-cli   — redis-cli"
+	@echo "  make lint        — Проверка кода (ruff)"
+	@echo "  make lint-fix    — Автоисправление (ruff --fix)"
+	@echo "  make fmt         — Форматирование (ruff format)"
+	@echo "  make fmt-check   — Проверка форматирования"
 	@echo ""
