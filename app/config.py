@@ -31,18 +31,9 @@ class Settings(BaseSettings):
     gru_sequence_length: int = 12  # окно (кол-во недель)
     gru_train_ratio: float = 0.8
 
-    # --- Static files (graphs) ---
-    plots_dir: str = "static/plots"
-
     @property
     def csv_full_path(self) -> Path:
         return Path(self.csv_path)
-
-    @property
-    def plots_full_path(self) -> Path:
-        path = Path(self.plots_dir)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

@@ -9,7 +9,6 @@ ClusterApp Backend — SARIMAX аналитический модуль.
 5. Постпрогноз (in-sample)
 6. Прогноз (out-of-sample)
 7. Метрики (MAE, RMSE, MAPE)
-8. Графики
 """
 
 import itertools
@@ -18,22 +17,15 @@ import warnings
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import acf, adfuller, pacf
 
 from app.config import settings
 from app.schemas.forecast import (
-    ForecastPlots,
     ForecastPoint,
     SarimaxResponse,
     StationarityResult,
 )
 from app.utils.metrics import compute_metrics
-from app.utils.plots import (
-    plot_acf_pacf,
-    plot_forecast,
-    plot_residuals,
-    plot_time_series,
-)
 
 
 # Кэш результатов: ключ (store_id, horizon) → SarimaxResponse
@@ -153,11 +145,15 @@ def run_sarimax_pipeline(
     # --- 1. Стационарность ---
     stationarity = check_stationarity(series)
 
-    # --- 2. ACF / PACF ---
-    acf_pacf_url = plot_acf_pacf(series.values, lags=min(40, len(series) // 2 - 1))
+    # --- 2. ACF / PACF (данные для фронта) ---
+    n_lags = min(40, len(series) // 2 - 1)
+    acf_values = acf(series.values, nlags=n_lags, fft=True).tolist()
+    pacf_values = pacf(series.values, nlags=n_lags, method="ywm").tolist()
 
     # --- 3. Выбор порядков ---
-    order, seasonal_order = _select_order(series, stationarity.differencing_order, seasonal_period)
+    order, seasonal_order = _select_order(
+        series, stationarity.differencing_order, seasonal_period,
+    )
 
     # --- 4. Train/test split ---
     split_idx = int(len(series) * train_ratio)
@@ -228,29 +224,8 @@ def run_sarimax_pipeline(
     test_predicted = forecast_mean.iloc[: len(test)].values
     metrics = compute_metrics(test_actual, test_predicted)
 
-    # --- 9. Графики ---
-    ts_url = plot_time_series(series.index, series.values, title="Магазин — Weekly Sales")
-
-    forecast_url = plot_forecast(
-        train_dates=train.index,
-        train_values=train.values,
-        test_dates=test.index,
-        test_actual=test.values,
-        test_predicted=test_predicted,
-        lower_ci=forecast_ci.iloc[: len(test), 0].values,
-        upper_ci=forecast_ci.iloc[: len(test), 1].values,
-        title=f"SARIMAX{order}x{seasonal_order}",
-    )
-
-    residuals = fitted_model.resid
-    residuals_url = plot_residuals(residuals.values)
-
-    plots = ForecastPlots(
-        time_series_url=ts_url,
-        forecast_url=forecast_url,
-        residuals_url=residuals_url,
-        acf_pacf_url=acf_pacf_url,
-    )
+    # --- 9. Остатки ---
+    residuals_data = [float(r) for r in fitted_model.resid.values]
 
     result = SarimaxResponse(
         stationarity=stationarity,
@@ -259,7 +234,10 @@ def run_sarimax_pipeline(
         train_forecast=train_forecast,
         test_forecast=test_forecast,
         metrics=metrics,
-        plots=plots,
+        residuals=residuals_data,
+        acf_values=acf_values,
+        pacf_values=pacf_values,
+        acf_lags=n_lags,
     )
 
     # Сохраняем в кэш

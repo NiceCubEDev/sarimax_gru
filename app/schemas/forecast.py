@@ -9,7 +9,7 @@ class ForecastRequest(BaseModel):
     """Запрос на прогнозирование."""
 
     store_id: int
-    horizon: int = 12
+    horizon: int = 12  # недель вперёд
 
 
 class StationarityResult(BaseModel):
@@ -39,18 +39,8 @@ class ModelMetrics(BaseModel):
     mape: float
 
 
-class ForecastPlots(BaseModel):
-    """URL-ы графиков."""
-
-    time_series_url: str
-    forecast_url: str
-    residuals_url: str | None = None
-    acf_pacf_url: str | None = None
-    training_loss_url: str | None = None
-
-
 class SarimaxResponse(BaseModel):
-    """Полный ответ SARIMAX: стационарность, параметры, прогнозы, метрики, графики."""
+    """Полный ответ SARIMAX."""
 
     stationarity: StationarityResult
     order: list[int]  # [p, d, q]
@@ -58,7 +48,10 @@ class SarimaxResponse(BaseModel):
     train_forecast: list[ForecastPoint]
     test_forecast: list[ForecastPoint]
     metrics: ModelMetrics
-    plots: ForecastPlots
+    residuals: list[float]  # остатки модели (для графика)
+    acf_values: list[float]  # автокорреляция (для графика ACF)
+    pacf_values: list[float]  # частичная автокорреляция (для графика PACF)
+    acf_lags: int  # кол-во лагов
 
 
 class GruHyperparams(BaseModel):
@@ -73,11 +66,10 @@ class GruHyperparams(BaseModel):
 
 
 class GruResponse(BaseModel):
-    """Полный ответ GRU: гиперпараметры, прогнозы, метрики, графики."""
+    """Полный ответ GRU."""
 
     hyperparams: GruHyperparams
     train_forecast: list[ForecastPoint]
     test_forecast: list[ForecastPoint]
     metrics: ModelMetrics
-    plots: ForecastPlots
-
+    training_losses: list[float]  # loss по эпохам (для графика кривой обучения)

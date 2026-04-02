@@ -19,13 +19,11 @@ from sklearn.preprocessing import MinMaxScaler
 
 from app.config import settings
 from app.schemas.forecast import (
-    ForecastPlots,
     ForecastPoint,
     GruHyperparams,
     GruResponse,
 )
 from app.utils.metrics import compute_metrics
-from app.utils.plots import plot_forecast, plot_time_series, plot_training_loss
 
 
 # Фичи для многомерного входа
@@ -279,29 +277,7 @@ def run_gru_pipeline(
     # --- 7. Метрики (на test) ---
     metrics = compute_metrics(test_actual, test_pred)
 
-    # --- 8. Графики ---
-    series = store_df[TARGET_COLUMN]
-    ts_url = plot_time_series(
-        series.index, series.values, title="Магазин — Weekly Sales",
-    )
-
-    forecast_url = plot_forecast(
-        train_dates=train_dates,
-        train_values=train_actual,
-        test_dates=test_dates,
-        test_actual=test_actual,
-        test_predicted=test_pred,
-        title="GRU — прогноз",
-    )
-
-    training_loss_url = plot_training_loss(losses)
-
-    plots = ForecastPlots(
-        time_series_url=ts_url,
-        forecast_url=forecast_url,
-        training_loss_url=training_loss_url,
-    )
-
+    # --- 8. Формирование ответа ---
     hyperparams = GruHyperparams(
         hidden_size=settings.gru_hidden_size,
         num_layers=settings.gru_num_layers,
@@ -316,7 +292,7 @@ def run_gru_pipeline(
         train_forecast=train_forecast,
         test_forecast=test_forecast,
         metrics=metrics,
-        plots=plots,
+        training_losses=losses,
     )
 
     # Сохраняем в кэш
