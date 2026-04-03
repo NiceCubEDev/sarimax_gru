@@ -1,15 +1,8 @@
 """
-ClusterApp Backend — GRU (Gated Recurrent Unit) аналитический модуль.
-
-Пайплайн:
-1. Подготовка данных (многомерный вход, MinMaxScaler)
-2. Создание скользящих окон (X, y)
-3. Обучение GRU-модели (PyTorch)
-4. Постпрогноз (in-sample)
-5. Прогноз (out-of-sample)
-6. Метрики (MAE, RMSE, MAPE)
-7. Графики
+Honest GRU pipeline with train/validation/test evaluation.
 """
+
+from copy import deepcopy
 
 import numpy as np
 import pandas as pd
@@ -18,31 +11,17 @@ import torch.nn as nn
 from sklearn.preprocessing import MinMaxScaler
 
 from app.config import settings
-from app.schemas.forecast import (
-    ForecastPoint,
-    GruHyperparams,
-    GruResponse,
-)
+from app.schemas.forecast import ForecastPoint, GruHyperparams, GruResult
+from app.service.forecasting import REQUIRED_COLUMNS, TimeSeriesSplit
 from app.utils.metrics import compute_metrics
 
 
-# Фичи для многомерного входа
-FEATURE_COLUMNS = [
-    "Weekly_Sales",
-    "Temperature",
-    "Fuel_Price",
-    "CPI",
-    "Unemployment",
-    "Holiday_Flag",
-]
+FEATURE_COLUMNS = REQUIRED_COLUMNS
 TARGET_COLUMN = "Weekly_Sales"
-
-# Кэш результатов: ключ (store_id, horizon) → GruResponse
-_cache: dict[tuple[int, int], GruResponse] = {}
 
 
 class GRUModel(nn.Module):
-    """GRU-модель для прогнозирования временных рядов."""
+    """GRU model for one-step forecasting."""
 
     def __init__(
         self,
@@ -52,9 +31,6 @@ class GRUModel(nn.Module):
         output_size: int = 1,
     ):
         super().__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-
         self.gru = nn.GRU(
             input_size=input_size,
             hidden_size=hidden_size,
@@ -65,238 +41,237 @@ class GRUModel(nn.Module):
         self.fc = nn.Linear(hidden_size, output_size)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (batch, seq_len, features)
-        out, _ = self.gru(x)
-        # Берём выход последнего шага
-        out = self.fc(out[:, -1, :])
-        return out
+        output, _hidden = self.gru(x)
+        return self.fc(output[:, -1, :])
 
 
-def _create_sequences(
-    data: np.ndarray,
+def _make_prediction_points(
+    dates: pd.Index,
+    actual: np.ndarray,
+    predicted: np.ndarray,
+) -> list[ForecastPoint]:
+    return [
+        ForecastPoint(
+            date=str(dates[position].date()),
+            actual=float(actual[position]),
+            predicted=float(predicted[position]),
+        )
+        for position in range(len(actual))
+    ]
+
+
+def _build_window_dataset(
+    features: np.ndarray,
     target: np.ndarray,
-    seq_length: int,
+    start_target_idx: int,
+    end_target_idx: int,
+    sequence_length: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Создание скользящих окон для обучения."""
-    xs, ys = [], []
-    for i in range(len(data) - seq_length):
-        xs.append(data[i : i + seq_length])
-        ys.append(target[i + seq_length])
-    return np.array(xs), np.array(ys)
+    xs: list[np.ndarray] = []
+    ys: list[float] = []
+    for target_idx in range(start_target_idx, end_target_idx):
+        start_idx = target_idx - sequence_length
+        if start_idx < 0:
+            continue
+        xs.append(features[start_idx:target_idx])
+        ys.append(target[target_idx])
+    if not xs:
+        raise ValueError("Not enough observations to build sequences for the requested split")
+    return np.asarray(xs, dtype=np.float32), np.asarray(ys, dtype=np.float32)
 
 
-def _train_model(
+def _to_tensor_pair(x: np.ndarray, y: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
+    return torch.tensor(x, dtype=torch.float32), torch.tensor(y, dtype=torch.float32).unsqueeze(1)
+
+
+def _train_with_validation(
     model: GRUModel,
     x_train: torch.Tensor,
     y_train: torch.Tensor,
+    x_validation: torch.Tensor,
+    y_validation: torch.Tensor,
     epochs: int,
     learning_rate: float,
     patience: int = 15,
-) -> list[float]:
-    """Обучение GRU с early stopping. Возвращает список losses."""
+) -> tuple[list[float], int, dict[str, torch.Tensor]]:
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    losses: list[float] = []
-    best_loss = float("inf")
+    history: list[float] = []
+    best_state: dict[str, torch.Tensor] | None = None
+    best_validation_loss = float("inf")
+    best_epoch = 1
     patience_counter = 0
 
-    model.train()
-    for _epoch in range(epochs):
+    for epoch in range(epochs):
+        model.train()
         optimizer.zero_grad()
-        output = model(x_train)
-        loss = criterion(output, y_train)
-        loss.backward()
+        train_loss = criterion(model(x_train), y_train)
+        train_loss.backward()
         optimizer.step()
+        history.append(float(train_loss.item()))
 
-        current_loss = loss.item()
-        losses.append(current_loss)
+        model.eval()
+        with torch.no_grad():
+            validation_loss = criterion(model(x_validation), y_validation).item()
 
-        # Early stopping
-        if current_loss < best_loss:
-            best_loss = current_loss
+        if validation_loss < best_validation_loss:
+            best_validation_loss = validation_loss
+            best_epoch = epoch + 1
+            best_state = deepcopy(model.state_dict())
             patience_counter = 0
         else:
             patience_counter += 1
             if patience_counter >= patience:
                 break
 
-    return losses
+    if best_state is None:
+        raise ValueError("GRU validation training did not produce a valid checkpoint")
+
+    return history, best_epoch, best_state
 
 
-def run_gru_pipeline(
-    store_df: pd.DataFrame,
-    horizon: int = 12,
-    store_id: int | None = None,
-) -> GruResponse:
-    """
-    Полный GRU-пайплайн для одного магазина.
-    Многомерный вход: Weekly_Sales + Temperature + Fuel_Price + CPI + Unemployment + Holiday_Flag.
-    Результат кэшируется по (store_id, horizon).
-    """
-    # Проверяем кэш
-    if store_id is not None:
-        cache_key = (store_id, horizon)
-        if cache_key in _cache:
-            return _cache[cache_key]
+def _train_for_epochs(
+    model: GRUModel,
+    x_train: torch.Tensor,
+    y_train: torch.Tensor,
+    epochs: int,
+    learning_rate: float,
+) -> None:
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    seq_length = settings.gru_sequence_length
-    train_ratio = settings.gru_train_ratio
+    for _ in range(epochs):
+        model.train()
+        optimizer.zero_grad()
+        loss = criterion(model(x_train), y_train)
+        loss.backward()
+        optimizer.step()
 
-    # --- 1. Подготовка данных ---
-    df = store_df[FEATURE_COLUMNS].copy()
-    dates = store_df.index
 
-    # Нормализация
+def _predict(model: GRUModel, x_data: torch.Tensor) -> np.ndarray:
+    model.eval()
+    with torch.no_grad():
+        return model(x_data).cpu().numpy().ravel()
+
+
+def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit) -> GruResult:
+    """Train, validate and test GRU without target or scaler leakage."""
+    torch.manual_seed(settings.random_seed)
+    np.random.seed(settings.random_seed)
+
+    sequence_length = settings.gru_sequence_length
     feature_scaler = MinMaxScaler()
     target_scaler = MinMaxScaler()
 
-    scaled_features = feature_scaler.fit_transform(df.values)
-    scaled_target = target_scaler.fit_transform(
-        df[[TARGET_COLUMN]].values,
+    train_features = split.train[FEATURE_COLUMNS].to_numpy(dtype=float)
+    train_target = split.train[[TARGET_COLUMN]].to_numpy(dtype=float)
+    feature_scaler.fit(train_features)
+    target_scaler.fit(train_target)
+
+    all_features = feature_scaler.transform(store_df[FEATURE_COLUMNS].to_numpy(dtype=float))
+    all_target = target_scaler.transform(store_df[[TARGET_COLUMN]].to_numpy(dtype=float)).ravel()
+    all_actual = store_df[TARGET_COLUMN].to_numpy(dtype=float)
+    all_dates = store_df.index
+
+    x_train, y_train = _build_window_dataset(
+        all_features,
+        all_target,
+        start_target_idx=sequence_length,
+        end_target_idx=split.train_end_idx,
+        sequence_length=sequence_length,
+    )
+    x_validation, y_validation = _build_window_dataset(
+        all_features,
+        all_target,
+        start_target_idx=split.train_end_idx,
+        end_target_idx=split.validation_end_idx,
+        sequence_length=sequence_length,
+    )
+    x_train_validation, y_train_validation = _build_window_dataset(
+        all_features,
+        all_target,
+        start_target_idx=sequence_length,
+        end_target_idx=split.validation_end_idx,
+        sequence_length=sequence_length,
+    )
+    x_test, y_test = _build_window_dataset(
+        all_features,
+        all_target,
+        start_target_idx=split.validation_end_idx,
+        end_target_idx=len(store_df),
+        sequence_length=sequence_length,
     )
 
-    # --- 2. Скользящие окна ---
-    x_all, y_all = _create_sequences(scaled_features, scaled_target.ravel(), seq_length)
+    x_train_t, y_train_t = _to_tensor_pair(x_train, y_train)
+    x_validation_t, y_validation_t = _to_tensor_pair(x_validation, y_validation)
+    x_train_validation_t, y_train_validation_t = _to_tensor_pair(
+        x_train_validation,
+        y_train_validation,
+    )
+    x_test_t, _y_test_t = _to_tensor_pair(x_test, y_test)
 
-    # Train/test split
-    split_idx = int(len(x_all) * train_ratio)
-    x_train, x_test = x_all[:split_idx], x_all[split_idx:]
-    y_train = y_all[:split_idx]
-    # y_test не используется — test_actual берётся из исходных данных
-
-    # В тензоры
-    x_train_t = torch.FloatTensor(x_train)
-    y_train_t = torch.FloatTensor(y_train).unsqueeze(1)
-    x_test_t = torch.FloatTensor(x_test)
-
-    # --- 3. Обучение ---
     model = GRUModel(
         input_size=len(FEATURE_COLUMNS),
         hidden_size=settings.gru_hidden_size,
         num_layers=settings.gru_num_layers,
     )
-
-    losses = _train_model(
+    losses, selected_epochs, best_state = _train_with_validation(
         model,
         x_train_t,
         y_train_t,
+        x_validation_t,
+        y_validation_t,
         epochs=settings.gru_epochs,
         learning_rate=settings.gru_learning_rate,
     )
+    model.load_state_dict(best_state)
 
-    # --- 4. Предсказания ---
-    model.eval()
-    with torch.no_grad():
-        train_pred_scaled = model(x_train_t).numpy().ravel()
-        test_pred_scaled = model(x_test_t).numpy().ravel()
+    validation_pred_scaled = _predict(model, x_validation_t)
 
-    # Обратное масштабирование
-    train_pred = target_scaler.inverse_transform(
-        train_pred_scaled.reshape(-1, 1),
-    ).ravel()
-    test_pred = target_scaler.inverse_transform(
-        test_pred_scaled.reshape(-1, 1),
-    ).ravel()
+    final_model = GRUModel(
+        input_size=len(FEATURE_COLUMNS),
+        hidden_size=settings.gru_hidden_size,
+        num_layers=settings.gru_num_layers,
+    )
+    _train_for_epochs(
+        final_model,
+        x_train_validation_t,
+        y_train_validation_t,
+        epochs=selected_epochs,
+        learning_rate=settings.gru_learning_rate,
+    )
+    test_pred_scaled = _predict(final_model, x_test_t)
 
-    # Реальные значения (без масштабирования)
-    # Даты сдвинуты на seq_length (первое окно)
-    train_dates = dates[seq_length : seq_length + len(train_pred)]
-    test_dates = dates[seq_length + split_idx : seq_length + split_idx + len(test_pred)]
+    validation_pred = target_scaler.inverse_transform(validation_pred_scaled.reshape(-1, 1)).ravel()
+    test_pred = target_scaler.inverse_transform(test_pred_scaled.reshape(-1, 1)).ravel()
 
-    train_actual = df[TARGET_COLUMN].values[seq_length : seq_length + len(train_pred)]
-    test_actual = df[TARGET_COLUMN].values[
-        seq_length + split_idx : seq_length + split_idx + len(test_pred)
-    ]
+    validation_actual = all_actual[split.train_end_idx:split.validation_end_idx]
+    test_actual = all_actual[split.validation_end_idx:]
+    validation_dates = all_dates[split.train_end_idx:split.validation_end_idx]
+    test_dates = all_dates[split.validation_end_idx:]
 
-    # --- 5. Формирование ответа ---
-    train_forecast = [
-        ForecastPoint(
-            date=(
-                str(train_dates[i].date())
-                if hasattr(train_dates[i], "date")
-                else str(train_dates[i])
-            ),
-            actual=float(train_actual[i]),
-            predicted=float(train_pred[i]),
-        )
-        for i in range(len(train_pred))
-    ]
+    validation_metrics = compute_metrics(validation_actual, validation_pred)
+    test_metrics = compute_metrics(test_actual, test_pred)
 
-    test_forecast = [
-        ForecastPoint(
-            date=(
-                str(test_dates[i].date())
-                if hasattr(test_dates[i], "date")
-                else str(test_dates[i])
-            ),
-            actual=float(test_actual[i]),
-            predicted=float(test_pred[i]),
-        )
-        for i in range(len(test_pred))
-    ]
-
-    # --- 6. Прогноз в будущее (horizon шагов) ---
-    last_sequence = scaled_features[-seq_length:]
-    future_preds = []
-    current_seq = torch.FloatTensor(last_sequence).unsqueeze(0)
-
-    model.eval()
-    with torch.no_grad():
-        for _ in range(horizon):
-            pred = model(current_seq)
-            pred_value = pred.item()
-            future_preds.append(pred_value)
-
-            # Сдвигаем окно: убираем первый шаг, добавляем новый
-            new_row = current_seq[0, -1, :].clone()
-            new_row[0] = pred_value  # Weekly_Sales = предсказание
-            current_seq = torch.cat([
-                current_seq[:, 1:, :],
-                new_row.unsqueeze(0).unsqueeze(0),
-            ], dim=1)
-
-    # Обратное масштабирование будущих предсказаний
-    future_pred_values = target_scaler.inverse_transform(
-        np.array(future_preds).reshape(-1, 1),
-    ).ravel()
-
-    # Генерация будущих дат (еженедельно)
-    last_date = dates[-1]
-    future_dates = pd.date_range(start=last_date, periods=horizon + 1, freq="W")[1:]
-
-    for i in range(horizon):
-        test_forecast.append(
-            ForecastPoint(
-                date=str(future_dates[i].date()),
-                actual=None,
-                predicted=float(future_pred_values[i]),
-            )
-        )
-
-    # --- 7. Метрики (на test) ---
-    metrics = compute_metrics(test_actual, test_pred)
-
-    # --- 8. Формирование ответа ---
     hyperparams = GruHyperparams(
         hidden_size=settings.gru_hidden_size,
         num_layers=settings.gru_num_layers,
-        epochs_trained=len(losses),
         learning_rate=settings.gru_learning_rate,
-        sequence_length=seq_length,
+        sequence_length=sequence_length,
+        selected_epochs=selected_epochs,
         features=FEATURE_COLUMNS,
     )
 
-    result = GruResponse(
+    return GruResult(
         hyperparams=hyperparams,
-        train_forecast=train_forecast,
-        test_forecast=test_forecast,
-        metrics=metrics,
+        validation_metrics=validation_metrics,
+        test_metrics=test_metrics,
+        validation_forecast=_make_prediction_points(
+            validation_dates,
+            validation_actual,
+            validation_pred,
+        ),
+        test_forecast=_make_prediction_points(test_dates, test_actual, test_pred),
         training_losses=losses,
     )
-
-    # Сохраняем в кэш
-    if store_id is not None:
-        _cache[(store_id, horizon)] = result
-
-    return result

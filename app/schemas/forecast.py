@@ -1,19 +1,61 @@
 """
-ClusterApp Backend — Pydantic-схемы для прогнозирования.
+ClusterApp Backend - schemas for forecasting and PDF reporting.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ForecastRequest(BaseModel):
-    """Запрос на прогнозирование."""
+    """Request for generating a comparison report."""
 
-    store_id: int
-    horizon: int = 12  # недель вперёд
+    store_id: int = Field(gt=0)
+
+
+class DataValidationSummary(BaseModel):
+    """Summary of validated input data."""
+
+    row_count: int
+    start_date: str
+    end_date: str
+    frequency_days: int
+    missing_values: int
+    duplicated_dates: int
+
+
+class DataSplitSummary(BaseModel):
+    """Chronological train/validation/test split summary."""
+
+    train_size: int
+    validation_size: int
+    test_size: int
+    train_start: str
+    train_end: str
+    validation_start: str
+    validation_end: str
+    test_start: str
+    test_end: str
+
+
+class ForecastPoint(BaseModel):
+    """One prediction point."""
+
+    date: str
+    actual: float
+    predicted: float
+
+
+class ModelMetrics(BaseModel):
+    """Forecast quality metrics."""
+
+    mae: float
+    rmse: float
+    mape: float
+    smape: float
+    wape: float
 
 
 class StationarityResult(BaseModel):
-    """Результат ADF-теста на стационарность."""
+    """ADF-based stationarity check result."""
 
     adf_statistic: float
     p_value: float
@@ -21,55 +63,47 @@ class StationarityResult(BaseModel):
     differencing_order: int
 
 
-class ForecastPoint(BaseModel):
-    """Одна точка прогноза."""
-
-    date: str
-    actual: float | None = None
-    predicted: float
-    lower_ci: float | None = None
-    upper_ci: float | None = None
-
-
-class ModelMetrics(BaseModel):
-    """Метрики качества модели."""
-
-    mae: float
-    rmse: float
-    mape: float
-
-
-class SarimaxResponse(BaseModel):
-    """Полный ответ SARIMAX."""
+class SarimaxResult(BaseModel):
+    """SARIMAX report section."""
 
     stationarity: StationarityResult
-    order: list[int]  # [p, d, q]
-    seasonal_order: list[int]  # [P, D, Q, s]
-    train_forecast: list[ForecastPoint]
+    order: list[int]
+    seasonal_order: list[int]
+    validation_metrics: ModelMetrics
+    test_metrics: ModelMetrics
+    validation_forecast: list[ForecastPoint]
     test_forecast: list[ForecastPoint]
-    metrics: ModelMetrics
-    residuals: list[float]  # остатки модели (для графика)
-    acf_values: list[float]  # автокорреляция (для графика ACF)
-    pacf_values: list[float]  # частичная автокорреляция (для графика PACF)
-    acf_lags: int  # кол-во лагов
+    residuals: list[float]
 
 
 class GruHyperparams(BaseModel):
-    """Гиперпараметры GRU-модели."""
+    """GRU hyperparameters used in training."""
 
     hidden_size: int
     num_layers: int
-    epochs_trained: int
     learning_rate: float
     sequence_length: int
+    selected_epochs: int
     features: list[str]
 
 
-class GruResponse(BaseModel):
-    """Полный ответ GRU."""
+class GruResult(BaseModel):
+    """GRU report section."""
 
     hyperparams: GruHyperparams
-    train_forecast: list[ForecastPoint]
+    validation_metrics: ModelMetrics
+    test_metrics: ModelMetrics
+    validation_forecast: list[ForecastPoint]
     test_forecast: list[ForecastPoint]
-    metrics: ModelMetrics
-    training_losses: list[float]  # loss по эпохам (для графика кривой обучения)
+    training_losses: list[float]
+
+
+class ComparisonReport(BaseModel):
+    """Complete comparison result for both models."""
+
+    store_id: int
+    data_validation: DataValidationSummary
+    split: DataSplitSummary
+    sarimax: SarimaxResult
+    gru: GruResult
+    pdf_path: str

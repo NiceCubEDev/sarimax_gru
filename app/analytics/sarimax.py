@@ -1,14 +1,5 @@
 """
-ClusterApp Backend — SARIMAX аналитический модуль.
-
-Пайплайн:
-1. Проверка стационарности (ADF-тест)
-2. ACF/PACF анализ
-3. Выбор порядков модели (p,d,q)(P,D,Q,s)
-4. Обучение SARIMAX
-5. Постпрогноз (in-sample)
-6. Прогноз (out-of-sample)
-7. Метрики (MAE, RMSE, MAPE)
+Honest SARIMAX pipeline with train/validation/test evaluation.
 """
 
 import itertools
@@ -17,231 +8,142 @@ import warnings
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from statsmodels.tsa.stattools import acf, adfuller, pacf
+from statsmodels.tsa.stattools import adfuller
 
 from app.config import settings
-from app.schemas.forecast import (
-    ForecastPoint,
-    SarimaxResponse,
-    StationarityResult,
-)
+from app.schemas.forecast import ForecastPoint, SarimaxResult, StationarityResult
+from app.service.forecasting import TimeSeriesSplit
 from app.utils.metrics import compute_metrics
 
 
-# Кэш результатов: ключ (store_id, horizon) → SarimaxResponse
-_cache: dict[tuple[int, int], SarimaxResponse] = {}
-
-
 def check_stationarity(series: pd.Series, max_diff: int = 2) -> StationarityResult:
-    """
-    Проверка стационарности с помощью ADF-теста.
-    Если ряд нестационарен — дифференцируем и проверяем снова.
-    """
+    """Run an ADF test on progressively differenced train data."""
     diff_order = 0
     current = series.dropna()
 
-    for _d in range(max_diff + 1):
-        result = adfuller(current, autolag="AIC")
-        adf_stat, p_value = result[0], result[1]
-
+    for _ in range(max_diff + 1):
+        adf_stat, p_value, *_rest = adfuller(current, autolag="AIC")
         if p_value <= 0.05:
             return StationarityResult(
-                adf_statistic=round(adf_stat, 4),
-                p_value=round(p_value, 4),
+                adf_statistic=round(float(adf_stat), 4),
+                p_value=round(float(p_value), 4),
                 is_stationary=True,
                 differencing_order=diff_order,
             )
-
         diff_order += 1
         current = current.diff().dropna()
 
-    # Если после max_diff ряд всё ещё нестационарен
     return StationarityResult(
-        adf_statistic=round(adf_stat, 4),
-        p_value=round(p_value, 4),
+        adf_statistic=round(float(adf_stat), 4),
+        p_value=round(float(p_value), 4),
         is_stationary=False,
         differencing_order=diff_order - 1,
     )
 
 
-def _fit_seasonal_variants(
+def _forecast_to_points(
+    actual_series: pd.Series,
+    predicted_values: np.ndarray,
+) -> list[ForecastPoint]:
+    return [
+        ForecastPoint(
+            date=str(actual_series.index[position].date()),
+            actual=float(actual_series.iloc[position]),
+            predicted=float(predicted_values[position]),
+        )
+        for position in range(len(actual_series))
+    ]
+
+
+def _fit_candidate(
     series: pd.Series,
-    p: int,
-    d: int,
-    q: int,
-    seasonal_period: int,
-    best_aic: float,
-    best_order: tuple[int, int, int],
-    best_seasonal: tuple[int, int, int, int],
-) -> tuple[float, tuple[int, int, int], tuple[int, int, int, int]]:
-    """Перебор сезонных параметров (P, Q) для фиксированных (p, d, q)."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        for P, Q in itertools.product(range(2), range(2)):
-            try:
-                model = SARIMAX(
-                    series,
-                    order=(p, d, q),
-                    seasonal_order=(P, 0, Q, seasonal_period),
-                    enforce_stationarity=False,
-                    enforce_invertibility=False,
-                )
-                fitted = model.fit(disp=False, maxiter=50)
-                if fitted.aic < best_aic:
-                    best_aic = fitted.aic
-                    best_order = (p, d, q)
-                    best_seasonal = (P, 0, Q, seasonal_period)
-            except Exception:
-                continue
-    return best_aic, best_order, best_seasonal
-
-
-def _select_order(
-    series: pd.Series,
-    d: int,
-    seasonal_period: int,
-    max_p: int = 2,
-    max_q: int = 2,
-) -> tuple[tuple[int, int, int], tuple[int, int, int, int]]:
-    """
-    Подбор порядков SARIMAX по минимальному AIC.
-    Перебирает комбинации (p, d, q) и (P, D, Q, s).
-    """
-    best_aic = np.inf
-    best_order = (1, d, 1)
-    best_seasonal = (0, 0, 0, seasonal_period)
-
-    # Упрощённый перебор для скорости
-    for p in range(max_p + 1):
-        for q in range(max_q + 1):
-            if p == 0 and q == 0:
-                continue
-            best_aic, best_order, best_seasonal = _fit_seasonal_variants(
-                series, p, d, q, seasonal_period,
-                best_aic, best_order, best_seasonal,
-            )
-
-    return best_order, best_seasonal
-
-
-def run_sarimax_pipeline(
-    store_df: pd.DataFrame,
-    horizon: int = 12,
-    store_id: int | None = None,
-) -> SarimaxResponse:
-    """
-    Полный SARIMAX-пайплайн для одного магазина.
-    Результат кэшируется по (store_id, horizon).
-    """
-    # Проверяем кэш
-    if store_id is not None:
-        cache_key = (store_id, horizon)
-        if cache_key in _cache:
-            return _cache[cache_key]
-    series = store_df["Weekly_Sales"]
-    seasonal_period = settings.sarimax_seasonal_period
-    train_ratio = settings.sarimax_train_ratio
-
-    # --- 1. Стационарность ---
-    stationarity = check_stationarity(series)
-
-    # --- 2. ACF / PACF (данные для фронта) ---
-    n_lags = min(40, len(series) // 2 - 1)
-    acf_values = acf(series.values, nlags=n_lags, fft=True).tolist()
-    pacf_values = pacf(series.values, nlags=n_lags, method="ywm").tolist()
-
-    # --- 3. Выбор порядков ---
-    order, seasonal_order = _select_order(
-        series, stationarity.differencing_order, seasonal_period,
-    )
-
-    # --- 4. Train/test split ---
-    split_idx = int(len(series) * train_ratio)
-    train = series.iloc[:split_idx]
-    test = series.iloc[split_idx:]
-
-    # --- 5. Обучение ---
+    order: tuple[int, int, int],
+    seasonal_order: tuple[int, int, int, int],
+):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         model = SARIMAX(
-            train,
+            series,
             order=order,
             seasonal_order=seasonal_order,
             enforce_stationarity=False,
             enforce_invertibility=False,
         )
-        fitted_model = model.fit(disp=False, maxiter=200)
+        return model.fit(disp=False, maxiter=200)
 
-    # --- 6. Постпрогноз (in-sample) ---
-    in_sample_pred = fitted_model.get_prediction(start=0, end=len(train) - 1)
-    in_sample_mean = in_sample_pred.predicted_mean
 
-    train_forecast = [
-        ForecastPoint(
-            date=str(train.index[i].date()),
-            actual=float(train.iloc[i]),
-            predicted=float(in_sample_mean.iloc[i]),
-        )
-        for i in range(len(train))
-    ]
+def _select_order(
+    split: TimeSeriesSplit,
+    differencing_order: int,
+) -> tuple[tuple[int, int, int], tuple[int, int, int, int], np.ndarray]:
+    """Select SARIMAX order by validation RMSE without touching the test set."""
+    seasonal_period = settings.sarimax_seasonal_period
+    validation_values = split.validation["Weekly_Sales"].to_numpy(dtype=float)
 
-    # --- 7. Прогноз (out-of-sample) ---
-    forecast_steps = len(test) + horizon
-    forecast_result = fitted_model.get_forecast(steps=forecast_steps)
-    forecast_mean = forecast_result.predicted_mean
-    forecast_ci = forecast_result.conf_int()
+    best_score = float("inf")
+    best_order = (1, differencing_order, 1)
+    best_seasonal_order = (0, 0, 0, seasonal_period)
+    best_predictions = np.empty(len(validation_values), dtype=float)
 
-    test_forecast = []
-    for i in range(len(test)):
-        test_forecast.append(
-            ForecastPoint(
-                date=str(test.index[i].date()),
-                actual=float(test.iloc[i]),
-                predicted=float(forecast_mean.iloc[i]),
-                lower_ci=float(forecast_ci.iloc[i, 0]),
-                upper_ci=float(forecast_ci.iloc[i, 1]),
-            )
-        )
+    for p, q, seasonal_p, seasonal_q in itertools.product(range(3), range(3), range(2), range(2)):
+        if p == 0 and q == 0 and seasonal_p == 0 and seasonal_q == 0:
+            continue
 
-    # Будущие точки (после test)
-    for i in range(len(test), forecast_steps):
-        test_forecast.append(
-            ForecastPoint(
-                date=(
-                    str(forecast_mean.index[i].date())
-                    if hasattr(forecast_mean.index[i], "date")
-                    else str(forecast_mean.index[i])
-                ),
-                actual=None,
-                predicted=float(forecast_mean.iloc[i]),
-                lower_ci=float(forecast_ci.iloc[i, 0]),
-                upper_ci=float(forecast_ci.iloc[i, 1]),
-            )
-        )
+        order = (p, differencing_order, q)
+        seasonal_order = (seasonal_p, 0, seasonal_q, seasonal_period)
+        try:
+            fitted_model = _fit_candidate(split.train["Weekly_Sales"], order, seasonal_order)
+            validation_pred = fitted_model.forecast(
+                steps=len(split.validation),
+            ).to_numpy(dtype=float)
+            validation_rmse = compute_metrics(validation_values, validation_pred).rmse
+        except Exception:
+            continue
 
-    # --- 8. Метрики (на test) ---
-    test_actual = test.values
-    test_predicted = forecast_mean.iloc[: len(test)].values
-    metrics = compute_metrics(test_actual, test_predicted)
+        if validation_rmse < best_score:
+            best_score = validation_rmse
+            best_order = order
+            best_seasonal_order = seasonal_order
+            best_predictions = validation_pred
 
-    # --- 9. Остатки ---
-    residuals_data = [float(r) for r in fitted_model.resid.values]
+    if not np.isfinite(best_score):
+        raise ValueError("SARIMAX could not fit any candidate configuration")
 
-    result = SarimaxResponse(
+    return best_order, best_seasonal_order, best_predictions
+
+
+def run_sarimax_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit) -> SarimaxResult:
+    """Train, validate and test SARIMAX without leaking test data."""
+    train_series = split.train["Weekly_Sales"]
+    validation_series = split.validation["Weekly_Sales"]
+    combined_train_series = pd.concat([train_series, validation_series])
+    test_series = split.test["Weekly_Sales"]
+
+    stationarity = check_stationarity(train_series)
+    order, seasonal_order, validation_predictions = _select_order(
+        split,
+        stationarity.differencing_order,
+    )
+
+    final_model = _fit_candidate(combined_train_series, order, seasonal_order)
+    test_predictions = final_model.forecast(steps=len(test_series)).to_numpy(dtype=float)
+
+    validation_metrics = compute_metrics(
+        validation_series.to_numpy(dtype=float),
+        validation_predictions,
+    )
+    test_metrics = compute_metrics(
+        test_series.to_numpy(dtype=float),
+        test_predictions,
+    )
+
+    return SarimaxResult(
         stationarity=stationarity,
         order=list(order),
         seasonal_order=list(seasonal_order),
-        train_forecast=train_forecast,
-        test_forecast=test_forecast,
-        metrics=metrics,
-        residuals=residuals_data,
-        acf_values=acf_values,
-        pacf_values=pacf_values,
-        acf_lags=n_lags,
+        validation_metrics=validation_metrics,
+        test_metrics=test_metrics,
+        validation_forecast=_forecast_to_points(validation_series, validation_predictions),
+        test_forecast=_forecast_to_points(test_series, test_predictions),
+        residuals=[float(value) for value in final_model.resid.to_numpy(dtype=float)],
     )
-
-    # Сохраняем в кэш
-    if store_id is not None:
-        _cache[(store_id, horizon)] = result
-
-    return result
