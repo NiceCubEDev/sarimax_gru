@@ -5,8 +5,8 @@ Command-line entrypoint for offline report generation.
 import argparse
 import json
 
-from app.service.data_loader import data_loader
-from app.service.reporting import generate_comparison_report
+from app.pipeline.data_loader import data_loader
+from app.pipeline.reporting import generate_comparison_report
 
 
 def _build_parser() -> argparse.ArgumentParser:

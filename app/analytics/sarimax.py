@@ -11,8 +11,8 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 from statsmodels.tsa.stattools import adfuller
 
 from app.config import settings
+from app.pipeline.forecasting import TimeSeriesSplit
 from app.schemas.forecast import ForecastPoint, SarimaxResult, StationarityResult
-from app.service.forecasting import TimeSeriesSplit
 from app.utils.metrics import compute_metrics
 
 

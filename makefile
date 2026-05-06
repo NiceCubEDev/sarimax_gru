@@ -1,5 +1,5 @@
 # ============================================
-# ClusterApp Backend — Makefile
+# ClusterApp offline forecasting pipeline
 # ============================================
 
 PYTHON = .venv/bin/python
@@ -27,7 +27,7 @@ clean:
 
 help:
 	@echo ""
-	@echo "  ClusterApp Backend — available commands:"
+	@echo "  ClusterApp offline pipeline - available commands:"
 	@echo ""
 	@echo "  make lint                    - Ruff check"
 	@echo "  make lint-fix                - Ruff auto-fix"

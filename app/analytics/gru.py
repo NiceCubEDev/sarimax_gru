@@ -11,8 +11,8 @@ import torch.nn as nn
 from sklearn.preprocessing import MinMaxScaler
 
 from app.config import settings
+from app.pipeline.forecasting import REQUIRED_COLUMNS, TimeSeriesSplit
 from app.schemas.forecast import ForecastPoint, GruHyperparams, GruResult
-from app.service.forecasting import REQUIRED_COLUMNS, TimeSeriesSplit
 from app.utils.metrics import compute_metrics
 
 
@@ -246,10 +246,10 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit) -> GruResul
     validation_pred = target_scaler.inverse_transform(validation_pred_scaled.reshape(-1, 1)).ravel()
     test_pred = target_scaler.inverse_transform(test_pred_scaled.reshape(-1, 1)).ravel()
 
-    validation_actual = all_actual[split.train_end_idx:split.validation_end_idx]
-    test_actual = all_actual[split.validation_end_idx:]
-    validation_dates = all_dates[split.train_end_idx:split.validation_end_idx]
-    test_dates = all_dates[split.validation_end_idx:]
+    validation_actual = all_actual[split.train_end_idx : split.validation_end_idx]
+    test_actual = all_actual[split.validation_end_idx :]
+    validation_dates = all_dates[split.train_end_idx : split.validation_end_idx]
+    test_dates = all_dates[split.validation_end_idx :]
 
     validation_metrics = compute_metrics(validation_actual, validation_pred)
     test_metrics = compute_metrics(test_actual, test_pred)

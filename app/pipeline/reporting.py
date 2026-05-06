@@ -11,8 +11,8 @@ from matplotlib.backends.backend_pdf import PdfPages
 from app.analytics.gru import run_gru_pipeline
 from app.analytics.sarimax import run_sarimax_pipeline
 from app.config import settings
+from app.pipeline.forecasting import split_time_series, validate_store_dataframe
 from app.schemas.forecast import ComparisonReport
-from app.service.forecasting import split_time_series, validate_store_dataframe
 
 
 plt.switch_backend("Agg")
