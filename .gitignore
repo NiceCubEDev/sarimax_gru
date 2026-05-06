@@ -1,0 +1,17 @@
+*.csv
+.env
+
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+.venv/
+venv/
+
+build/
+dist/
+static/plots/
+
+.serena/
