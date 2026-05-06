@@ -39,7 +39,8 @@ def compute_metrics(actual: np.ndarray, predicted: np.ndarray) -> ModelMetrics:
     if smape_mask.any():
         smape = float(
             np.mean(
-                2 * np.abs(predicted_arr[smape_mask] - actual_arr[smape_mask])
+                2
+                * np.abs(predicted_arr[smape_mask] - actual_arr[smape_mask])
                 / denominator[smape_mask]
             )
             * 100

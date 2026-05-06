@@ -1,9 +1,10 @@
 # ============================================
-# ClusterApp Backend — Makefile
+# ClusterApp offline-пайплайн прогнозирования
 # ============================================
 
 PYTHON = .venv/bin/python
 STORE_ID ?= 1
+HORIZON ?= 12
 
 .PHONY: lint lint-fix fmt fmt-check initial-methods clean help
 
@@ -20,20 +21,20 @@ fmt-check:
 	$(PYTHON) -m ruff format app --check
 
 initial-methods:
-	$(PYTHON) -m app.cli initial-methods --store-id $(STORE_ID)
+	$(PYTHON) -m app.cli initial-methods --store-id $(STORE_ID) --horizon $(HORIZON)
 
 clean:
 	rm -rf build/reports/*
 
 help:
 	@echo ""
-	@echo "  ClusterApp Backend — available commands:"
+	@echo "  ClusterApp offline-пайплайн - доступные команды:"
 	@echo ""
-	@echo "  make lint                    - Ruff check"
-	@echo "  make lint-fix                - Ruff auto-fix"
-	@echo "  make fmt                     - Ruff format"
-	@echo "  make fmt-check               - Ruff format check"
-	@echo "  make initial-methods         - Run validation, SARIMAX, GRU and build PDF"
-	@echo "  make initial-methods STORE_ID=5"
-	@echo "  make clean                   - Remove generated reports"
+	@echo "  make lint                    - Проверка Ruff"
+	@echo "  make lint-fix                - Автоисправления Ruff"
+	@echo "  make fmt                     - Форматирование Ruff"
+	@echo "  make fmt-check               - Проверка форматирования Ruff"
+	@echo "  make initial-methods         - Валидация, SARIMAX, GRU и сборка PDF"
+	@echo "  make initial-methods STORE_ID=5 HORIZON=12"
+	@echo "  make clean                   - Удалить сгенерированные отчеты"
 	@echo ""

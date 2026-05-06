@@ -20,6 +20,13 @@ REQUIRED_COLUMNS = [
     "Holiday_Flag",
 ]
 
+CONTINUOUS_FUTURE_COLUMNS = [
+    "Temperature",
+    "Fuel_Price",
+    "CPI",
+    "Unemployment",
+]
+
 
 @dataclass(frozen=True)
 class TimeSeriesSplit:
@@ -118,3 +125,58 @@ def split_time_series(df: pd.DataFrame) -> TimeSeriesSplit:
         validation_end_idx=train_size + validation_size,
         summary=summary,
     )
+
+
+def build_future_dates(
+    last_date: pd.Timestamp, horizon: int, frequency_days: int = 7
+) -> pd.DatetimeIndex:
+    """Build forecast dates after the last factual observation."""
+    if horizon <= 0:
+        raise ValueError("Forecast horizon must be greater than zero")
+    start_date = last_date + pd.Timedelta(days=frequency_days)
+    return pd.date_range(start=start_date, periods=horizon, freq=f"{frequency_days}D")
+
+
+def is_walmart_holiday_week(date: pd.Timestamp) -> bool:
+    """Return whether a weekly Walmart date is one of the known holiday weeks."""
+    holiday_dates = {
+        # Super Bowl weeks
+        (2010, 2, 12),
+        (2011, 2, 11),
+        (2012, 2, 10),
+        (2013, 2, 8),
+        (2014, 2, 7),
+        # Labor Day weeks
+        (2010, 9, 10),
+        (2011, 9, 9),
+        (2012, 9, 7),
+        (2013, 9, 6),
+        (2014, 9, 5),
+        # Thanksgiving weeks
+        (2010, 11, 26),
+        (2011, 11, 25),
+        (2012, 11, 23),
+        (2013, 11, 29),
+        (2014, 11, 28),
+        # Christmas weeks
+        (2010, 12, 31),
+        (2011, 12, 30),
+        (2012, 12, 28),
+        (2013, 12, 27),
+        (2014, 12, 26),
+    }
+    normalized = pd.Timestamp(date)
+    return (normalized.year, normalized.month, normalized.day) in holiday_dates
+
+
+def build_future_feature_frame(
+    store_df: pd.DataFrame, future_dates: pd.DatetimeIndex
+) -> pd.DataFrame:
+    """Create future non-target feature assumptions for recursive GRU forecasting."""
+    reference_window = store_df.tail(settings.gru_sequence_length)
+    future_defaults = reference_window[CONTINUOUS_FUTURE_COLUMNS].mean()
+    future_df = pd.DataFrame(index=future_dates)
+    for column in CONTINUOUS_FUTURE_COLUMNS:
+        future_df[column] = float(future_defaults[column])
+    future_df["Holiday_Flag"] = [int(is_walmart_holiday_week(date)) for date in future_dates]
+    return future_df

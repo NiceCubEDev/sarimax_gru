@@ -9,6 +9,7 @@ class ForecastRequest(BaseModel):
     """Request for generating a comparison report."""
 
     store_id: int = Field(gt=0)
+    horizon: int = Field(default=12, gt=0)
 
 
 class DataValidationSummary(BaseModel):
@@ -40,7 +41,7 @@ class ForecastPoint(BaseModel):
     """One prediction point."""
 
     date: str
-    actual: float
+    actual: float | None = None
     predicted: float
 
 
@@ -71,8 +72,10 @@ class SarimaxResult(BaseModel):
     seasonal_order: list[int]
     validation_metrics: ModelMetrics
     test_metrics: ModelMetrics
+    history_forecast: list[ForecastPoint]
     validation_forecast: list[ForecastPoint]
     test_forecast: list[ForecastPoint]
+    future_forecast: list[ForecastPoint]
     residuals: list[float]
 
 
@@ -84,6 +87,7 @@ class GruHyperparams(BaseModel):
     learning_rate: float
     sequence_length: int
     selected_epochs: int
+    future_epochs: int
     features: list[str]
 
 
@@ -93,8 +97,10 @@ class GruResult(BaseModel):
     hyperparams: GruHyperparams
     validation_metrics: ModelMetrics
     test_metrics: ModelMetrics
+    history_forecast: list[ForecastPoint]
     validation_forecast: list[ForecastPoint]
     test_forecast: list[ForecastPoint]
+    future_forecast: list[ForecastPoint]
     training_losses: list[float]
 
 
@@ -102,6 +108,7 @@ class ComparisonReport(BaseModel):
     """Complete comparison result for both models."""
 
     store_id: int
+    horizon: int
     data_validation: DataValidationSummary
     split: DataSplitSummary
     sarimax: SarimaxResult
