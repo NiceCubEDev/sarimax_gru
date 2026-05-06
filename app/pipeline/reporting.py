@@ -214,17 +214,19 @@ def _plot_error_page(pdf: PdfPages, report: ComparisonReport) -> None:
 
     sarimax_abs_error = (sarimax_df["actual"] - sarimax_df["predicted"]).abs()
     gru_abs_error = (gru_df["actual"] - gru_df["predicted"]).abs()
+    epochs = range(1, len(report.gru.training_losses) + 1)
 
-    fig, axes = plt.subplots(2, 1, figsize=(11.69, 8.27), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(11.69, 8.27))
     axes[0].plot(dates, sarimax_abs_error, label="Абсолютная ошибка SARIMAX", color="#2563eb")
     axes[0].plot(dates, gru_abs_error, label="Абсолютная ошибка GRU", color="#dc2626")
     axes[0].set_title("Абсолютная ошибка на тестовом периоде", fontsize=11)
+    axes[0].set_xlabel("Дата", fontsize=9)
     axes[0].set_ylabel("Абсолютная ошибка", fontsize=9)
     axes[0].tick_params(axis="both", labelsize=8)
     axes[0].grid(alpha=0.3)
     axes[0].legend(fontsize=8)
 
-    axes[1].plot(report.gru.training_losses, color="#ea580c")
+    axes[1].plot(epochs, report.gru.training_losses, color="#ea580c")
     axes[1].set_title("Функция потерь GRU при обучении", fontsize=11)
     axes[1].set_xlabel("Эпоха", fontsize=9)
     axes[1].set_ylabel("MSE loss", fontsize=9)
