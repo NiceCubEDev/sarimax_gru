@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     validation_ratio: float = 0.15
     test_ratio: float = 0.15
     random_seed: int = 42
+    forecast_horizon: int = 12
 
     # --- SARIMAX defaults ---
     sarimax_seasonal_period: int = 52
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     gru_hidden_size: int = 64
     gru_num_layers: int = 2
     gru_epochs: int = 100
+    gru_future_min_epochs: int = 100
     gru_learning_rate: float = 0.001
     gru_sequence_length: int = 12
 

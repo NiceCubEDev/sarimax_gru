@@ -1,51 +1,60 @@
 # clusterapp-backend
 
-Offline CLI pipeline for Walmart weekly sales forecasting with an honest comparison of
-`SARIMAX` and `GRU`.
+CLI-пайплайн для прогнозирования недельных продаж Walmart с честным сравнением моделей
+`SARIMAX` и `GRU`.
 
-## What It Does
+## Что Делает Проект
 
-- loads one store's weekly sales time series from `data/Walmart.csv`
-- validates required columns, missing values, duplicate dates, and weekly frequency
-- performs a chronological `train / validation / test` split
-- trains and selects `SARIMAX` on validation without touching the test split
-- trains `GRU` with train-only scaling and early stopping on validation
-- compares both models on the test split
-- prints a JSON summary and generates a PDF report in `build/reports/`
+- загружает недельный ряд продаж одного магазина из `data/Walmart.csv`
+- проверяет обязательные колонки, пропуски, дубликаты дат и недельную частоту
+- выполняет хронологическое разбиение `train / validation / test`
+- обучает и подбирает `SARIMAX` на валидации, не используя тестовую выборку
+- обучает `GRU` с масштабированием только по train и early stopping на validation
+- сравнивает обе модели на тестовом периоде
+- прогнозирует будущие недельные продажи после последней фактической даты
+- печатает JSON-сводку и генерирует PDF-отчет в `build/reports/`
 
-## Current Architecture
+## Текущая Архитектура
 
-This project is a CLI/offline analytics pipeline, not a FastAPI application.
+Сейчас проект является CLI/offline-пайплайном аналитики, а не FastAPI-приложением.
 
 ```text
 app/
-  cli.py                  command-line entrypoint
-  config.py               environment-based pipeline settings
-  pipeline/               data loading, validation, splitting, reporting
-  analytics/              SARIMAX and GRU model pipelines
-  schemas/                Pydantic report/result models
-  utils/                  shared metric helpers
+  cli.py                  точка входа командной строки
+  config.py               настройки пайплайна через переменные окружения
+  pipeline/               загрузка, валидация, разбиение, отчетность
+  analytics/              пайплайны моделей SARIMAX и GRU
+  schemas/                Pydantic-модели результата и отчета
+  utils/                  общие функции метрик
 data/
-  Walmart.csv             input dataset
+  Walmart.csv             входной датасет
 ```
 
-Generated reports and build artifacts are intentionally ignored by git.
+Сгенерированные отчеты и build-артефакты намеренно игнорируются git.
 
-## Commands
+## Команды
 
-Use the existing virtual environment:
+Используйте существующее виртуальное окружение:
 
 ```bash
 make lint
 make fmt-check
 make initial-methods
-make initial-methods STORE_ID=5
+make initial-methods STORE_ID=5 HORIZON=12
 ```
 
-The main processing command is:
+Основная команда обработки:
 
 ```bash
 make initial-methods
 ```
 
-It prints a JSON summary to stdout and saves the PDF report to `build/reports/`.
+Она печатает JSON-сводку в stdout и сохраняет PDF-отчет в `build/reports/`.
+
+`HORIZON` задает количество будущих недель после последней фактической даты.
+SARIMAX строит прогноз напрямую по полному наблюдаемому ряду продаж. GRU прогнозирует
+рекурсивно: каждое предсказанное значение `Weekly_Sales` подается в следующее входное
+окно. Для GRU дополнительно добавляются календарные признаки недели года
+`Week_Sin`/`Week_Cos`, будущие значения `Holiday_Flag` вычисляются по известным
+праздничным неделям Walmart, а будущие погодные и экономические признаки берутся
+как среднее последнего окна GRU.
