@@ -23,6 +23,7 @@ def _metrics_rows(report: ComparisonReport) -> list[tuple[str, str, str]]:
     gru = report.gru.test_metrics
     return [
         ("MAE", f"{sarimax.mae:.2f}", f"{gru.mae:.2f}"),
+        ("MSE", f"{sarimax.mse:.2f}", f"{gru.mse:.2f}"),
         ("RMSE", f"{sarimax.rmse:.2f}", f"{gru.rmse:.2f}"),
         ("MAPE, %", f"{sarimax.mape:.2f}", f"{gru.mape:.2f}"),
         ("sMAPE, %", f"{sarimax.smape:.2f}", f"{gru.smape:.2f}"),
@@ -149,9 +150,14 @@ def _plot_future_page(pdf: PdfPages, report: ComparisonReport, store_df: pd.Data
     sarimax_history_dates = pd.to_datetime(sarimax_history["date"])
     gru_history_dates = pd.to_datetime(gru_history["date"])
     future_dates = pd.to_datetime(sarimax_future["date"])
+    min_reasonable_sales = float(store_df["Weekly_Sales"].min()) * 0.5
+    sarimax_history_predicted = sarimax_history["predicted"].where(
+        sarimax_history["predicted"] >= min_reasonable_sales,
+    )
 
     last_actual_date = store_df.index.max()
     last_actual_value = float(store_df["Weekly_Sales"].iloc[-1])
+    test_start_date = pd.Timestamp(report.split.test_start)
     sarimax_future_dates = pd.DatetimeIndex([last_actual_date, *future_dates])
     sarimax_future_values = [last_actual_value, *sarimax_future["predicted"].to_list()]
     gru_future_dates = pd.DatetimeIndex([last_actual_date, *future_dates])
@@ -167,7 +173,7 @@ def _plot_future_page(pdf: PdfPages, report: ComparisonReport, store_df: pd.Data
     )
     axis.plot(
         sarimax_history_dates,
-        sarimax_history["predicted"],
+        sarimax_history_predicted,
         label="SARIMAX модельная линия на истории",
         color="#2563eb",
         linewidth=2.0,
@@ -195,7 +201,52 @@ def _plot_future_page(pdf: PdfPages, report: ComparisonReport, store_df: pd.Data
         linewidth=2.0,
         linestyle="--",
     )
-    axis.axvline(last_actual_date, color="#6b7280", linewidth=1.2, linestyle=":")
+    axis.axvspan(
+        test_start_date,
+        last_actual_date,
+        color="#f59e0b",
+        alpha=0.08,
+        label="Тестовый промежуток",
+    )
+    axis.axvspan(
+        last_actual_date,
+        future_dates.max(),
+        color="#10b981",
+        alpha=0.06,
+        label="Будущий прогноз",
+    )
+    axis.axvline(
+        test_start_date,
+        color="#92400e",
+        linewidth=1.4,
+        linestyle=":",
+        label="Начало тестового промежутка",
+    )
+    axis.axvline(
+        last_actual_date,
+        color="#6b7280",
+        linewidth=1.4,
+        linestyle=":",
+        label="Начало будущего прогноза",
+    )
+    axis.text(
+        0.99,
+        0.03,
+        (
+            "Ошибки на тестовом промежутке\n"
+            f"SARIMAX MAPE: {report.sarimax.test_metrics.mape:.2f}%\n"
+            f"GRU MAPE: {report.gru.test_metrics.mape:.2f}%\n"
+            f"SARIMAX WAPE: {report.sarimax.test_metrics.wape:.2f}%\n"
+            f"GRU WAPE: {report.gru.test_metrics.wape:.2f}%\n"
+            f"SARIMAX RMSE: {report.sarimax.test_metrics.rmse:,.0f}\n"
+            f"GRU RMSE: {report.gru.test_metrics.rmse:,.0f}"
+        ),
+        transform=axis.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "alpha": 0.78},
+    )
     axis.set_title("Факт, тестовые прогнозы и будущий прогноз", fontsize=11)
     axis.set_xlabel("Дата", fontsize=9)
     axis.set_ylabel("Недельные продажи", fontsize=9)

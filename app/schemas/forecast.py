@@ -49,6 +49,7 @@ class ModelMetrics(BaseModel):
     """Forecast quality metrics."""
 
     mae: float
+    mse: float
     rmse: float
     mape: float
     smape: float
