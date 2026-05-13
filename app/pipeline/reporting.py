@@ -150,10 +150,6 @@ def _plot_future_page(pdf: PdfPages, report: ComparisonReport, store_df: pd.Data
     sarimax_history_dates = pd.to_datetime(sarimax_history["date"])
     gru_history_dates = pd.to_datetime(gru_history["date"])
     future_dates = pd.to_datetime(sarimax_future["date"])
-    min_reasonable_sales = float(store_df["Weekly_Sales"].min()) * 0.5
-    sarimax_history_predicted = sarimax_history["predicted"].where(
-        sarimax_history["predicted"] >= min_reasonable_sales,
-    )
 
     last_actual_date = store_df.index.max()
     last_actual_value = float(store_df["Weekly_Sales"].iloc[-1])
@@ -173,7 +169,7 @@ def _plot_future_page(pdf: PdfPages, report: ComparisonReport, store_df: pd.Data
     )
     axis.plot(
         sarimax_history_dates,
-        sarimax_history_predicted,
+        sarimax_history["predicted"],
         label="SARIMAX модельная линия на истории",
         color="#2563eb",
         linewidth=2.0,

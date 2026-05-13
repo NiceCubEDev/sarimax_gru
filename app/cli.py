@@ -8,6 +8,7 @@ import json
 from app.config import settings
 from app.pipeline.data_loader import data_loader
 from app.pipeline.reporting import generate_comparison_report
+from app.utils.progress import ProgressSpinner
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -42,11 +43,16 @@ def main() -> int:
     if args.command != "initial-methods":
         parser.error(f"Unsupported command: {args.command}")
 
-    report = generate_comparison_report(
-        store_df=data_loader.get_store_data(args.store_id),
-        store_id=args.store_id,
-        horizon=args.horizon,
+    progress_message = (
+        f"Обработка данных магазина {args.store_id}: "
+        "проверка данных, обучение SARIMAX/GRU и сборка PDF"
     )
+    with ProgressSpinner(progress_message):
+        report = generate_comparison_report(
+            store_df=data_loader.get_store_data(args.store_id),
+            store_id=args.store_id,
+            horizon=args.horizon,
+        )
     print(json.dumps(report.model_dump(), ensure_ascii=False, indent=2))
     return 0
 

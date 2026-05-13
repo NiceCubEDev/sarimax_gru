@@ -13,9 +13,9 @@ class Settings(BaseSettings):
     # --- Data ---
     csv_path: str = "data/Walmart.csv"
     reports_dir: str = "build/reports"
-    train_ratio: float = 0.6
-    validation_ratio: float = 0.2
-    test_ratio: float = 0.2
+    train_ratio: float = 0.7
+    validation_ratio: float = 0.15
+    test_ratio: float = 0.15
     random_seed: int = 42
     forecast_horizon: int = 12
 
