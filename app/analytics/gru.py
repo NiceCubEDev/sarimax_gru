@@ -1,8 +1,6 @@
 """
-Honest GRU pipeline with train/validation/test evaluation.
+Honest GRU pipeline with train/test evaluation.
 """
-
-from copy import deepcopy
 
 import numpy as np
 import pandas as pd
@@ -17,7 +15,7 @@ from app.pipeline.forecasting import (
     build_future_dates,
     build_future_feature_frame,
 )
-from app.schemas.forecast import ForecastPoint, GruHyperparams, GruResult
+from app.schemas.forecast import ForecastPoint, FutureFeaturePoint, GruHyperparams, GruResult
 from app.utils.metrics import compute_metrics
 
 
@@ -82,6 +80,20 @@ def _make_future_prediction_points(
     ]
 
 
+def _make_future_feature_points(future_features: pd.DataFrame) -> list[FutureFeaturePoint]:
+    return [
+        FutureFeaturePoint(
+            date=str(date.date()),
+            temperature=round(float(row["Temperature"]), 4),
+            fuel_price=round(float(row["Fuel_Price"]), 4),
+            cpi=round(float(row["CPI"]), 4),
+            unemployment=round(float(row["Unemployment"]), 4),
+            holiday_flag=int(row["Holiday_Flag"]),
+        )
+        for date, row in future_features.iterrows()
+    ]
+
+
 def _with_date_features(df: pd.DataFrame) -> pd.DataFrame:
     enriched_df = df.copy()
     weeks = enriched_df.index.isocalendar().week.astype(int).to_numpy()
@@ -116,62 +128,16 @@ def _to_tensor_pair(x: np.ndarray, y: np.ndarray) -> tuple[torch.Tensor, torch.T
     return torch.tensor(x, dtype=torch.float32), torch.tensor(y, dtype=torch.float32).unsqueeze(1)
 
 
-def _train_with_validation(
-    model: GRUModel,
-    x_train: torch.Tensor,
-    y_train: torch.Tensor,
-    x_validation: torch.Tensor,
-    y_validation: torch.Tensor,
-    epochs: int,
-    learning_rate: float,
-    patience: int = 15,
-) -> tuple[list[float], int, dict[str, torch.Tensor]]:
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-
-    history: list[float] = []
-    best_state: dict[str, torch.Tensor] | None = None
-    best_validation_loss = float("inf")
-    best_epoch = 1
-    patience_counter = 0
-
-    for epoch in range(epochs):
-        model.train()
-        optimizer.zero_grad()
-        train_loss = criterion(model(x_train), y_train)
-        train_loss.backward()
-        optimizer.step()
-        history.append(float(train_loss.item()))
-
-        model.eval()
-        with torch.no_grad():
-            validation_loss = criterion(model(x_validation), y_validation).item()
-
-        if validation_loss < best_validation_loss:
-            best_validation_loss = validation_loss
-            best_epoch = epoch + 1
-            best_state = deepcopy(model.state_dict())
-            patience_counter = 0
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                break
-
-    if best_state is None:
-        raise ValueError("GRU validation training did not produce a valid checkpoint")
-
-    return history, best_epoch, best_state
-
-
 def _train_for_epochs(
     model: GRUModel,
     x_train: torch.Tensor,
     y_train: torch.Tensor,
     epochs: int,
     learning_rate: float,
-) -> None:
+) -> list[float]:
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    history: list[float] = []
 
     for _ in range(epochs):
         model.train()
@@ -179,6 +145,9 @@ def _train_for_epochs(
         loss = criterion(model(x_train), y_train)
         loss.backward()
         optimizer.step()
+        history.append(float(loss.item()))
+
+    return history
 
 
 def _predict(model: GRUModel, x_data: torch.Tensor) -> np.ndarray:
@@ -216,7 +185,7 @@ def _recursive_future_forecast(
 
 
 def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: int) -> GruResult:
-    """Train, validate and test GRU without target or scaler leakage."""
+    """Train and test GRU without target or scaler leakage."""
     torch.manual_seed(settings.random_seed)
     np.random.seed(settings.random_seed)
 
@@ -242,34 +211,15 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: in
         end_target_idx=split.train_end_idx,
         sequence_length=sequence_length,
     )
-    x_validation, y_validation = _build_window_dataset(
-        all_features,
-        all_target,
-        start_target_idx=split.train_end_idx,
-        end_target_idx=split.validation_end_idx,
-        sequence_length=sequence_length,
-    )
-    x_train_validation, y_train_validation = _build_window_dataset(
-        all_features,
-        all_target,
-        start_target_idx=sequence_length,
-        end_target_idx=split.validation_end_idx,
-        sequence_length=sequence_length,
-    )
     x_test, y_test = _build_window_dataset(
         all_features,
         all_target,
-        start_target_idx=split.validation_end_idx,
+        start_target_idx=split.train_end_idx,
         end_target_idx=len(store_df),
         sequence_length=sequence_length,
     )
 
     x_train_t, y_train_t = _to_tensor_pair(x_train, y_train)
-    x_validation_t, y_validation_t = _to_tensor_pair(x_validation, y_validation)
-    x_train_validation_t, y_train_validation_t = _to_tensor_pair(
-        x_train_validation,
-        y_train_validation,
-    )
     x_test_t, _y_test_t = _to_tensor_pair(x_test, y_test)
 
     model = GRUModel(
@@ -277,32 +227,17 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: in
         hidden_size=settings.gru_hidden_size,
         num_layers=settings.gru_num_layers,
     )
-    losses, selected_epochs, best_state = _train_with_validation(
+    selected_epochs = settings.gru_epochs
+    losses = _train_for_epochs(
         model,
         x_train_t,
         y_train_t,
-        x_validation_t,
-        y_validation_t,
-        epochs=settings.gru_epochs,
-        learning_rate=settings.gru_learning_rate,
-    )
-    model.load_state_dict(best_state)
-
-    validation_pred_scaled = _predict(model, x_validation_t)
-
-    final_model = GRUModel(
-        input_size=len(FEATURE_COLUMNS),
-        hidden_size=settings.gru_hidden_size,
-        num_layers=settings.gru_num_layers,
-    )
-    _train_for_epochs(
-        final_model,
-        x_train_validation_t,
-        y_train_validation_t,
         epochs=selected_epochs,
         learning_rate=settings.gru_learning_rate,
     )
-    test_pred_scaled = _predict(final_model, x_test_t)
+
+    train_pred_scaled = _predict(model, x_train_t)
+    test_pred_scaled = _predict(model, x_test_t)
 
     future_feature_scaler = MinMaxScaler()
     future_target_scaler = MinMaxScaler()
@@ -343,7 +278,9 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: in
     history_actual = all_actual
     history_dates = all_dates
     future_dates = build_future_dates(store_df.index.max(), horizon)
-    future_features = _with_date_features(build_future_feature_frame(store_df, future_dates))
+    future_feature_frame = build_future_feature_frame(store_df, future_dates)
+    future_feature_points = _make_future_feature_points(future_feature_frame)
+    future_features = _with_date_features(future_feature_frame)
     future_pred = _recursive_future_forecast(
         future_model,
         feature_df,
@@ -354,15 +291,14 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: in
         sequence_length,
     )
 
-    validation_pred = target_scaler.inverse_transform(validation_pred_scaled.reshape(-1, 1)).ravel()
+    train_pred = target_scaler.inverse_transform(train_pred_scaled.reshape(-1, 1)).ravel()
     test_pred = target_scaler.inverse_transform(test_pred_scaled.reshape(-1, 1)).ravel()
 
-    validation_actual = all_actual[split.train_end_idx : split.validation_end_idx]
-    test_actual = all_actual[split.validation_end_idx :]
-    validation_dates = all_dates[split.train_end_idx : split.validation_end_idx]
-    test_dates = all_dates[split.validation_end_idx :]
+    training_actual = all_actual[sequence_length : split.train_end_idx]
+    test_actual = all_actual[split.train_end_idx :]
+    test_dates = all_dates[split.train_end_idx :]
 
-    validation_metrics = compute_metrics(validation_actual, validation_pred)
+    training_metrics = compute_metrics(training_actual, train_pred)
     test_metrics = compute_metrics(test_actual, test_pred)
 
     hyperparams = GruHyperparams(
@@ -377,15 +313,11 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: in
 
     return GruResult(
         hyperparams=hyperparams,
-        validation_metrics=validation_metrics,
+        training_metrics=training_metrics,
         test_metrics=test_metrics,
         history_forecast=_make_prediction_points(history_dates, history_actual, history_pred),
-        validation_forecast=_make_prediction_points(
-            validation_dates,
-            validation_actual,
-            validation_pred,
-        ),
         test_forecast=_make_prediction_points(test_dates, test_actual, test_pred),
         future_forecast=_make_future_prediction_points(future_dates, future_pred),
+        future_features=future_feature_points,
         training_losses=losses,
     )

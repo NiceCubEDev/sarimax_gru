@@ -24,15 +24,12 @@ class DataValidationSummary(BaseModel):
 
 
 class DataSplitSummary(BaseModel):
-    """Chronological train/validation/test split summary."""
+    """Chronological train/test split summary."""
 
     train_size: int
-    validation_size: int
     test_size: int
     train_start: str
     train_end: str
-    validation_start: str
-    validation_end: str
     test_start: str
     test_end: str
 
@@ -43,6 +40,17 @@ class ForecastPoint(BaseModel):
     date: str
     actual: float | None = None
     predicted: float
+
+
+class FutureFeaturePoint(BaseModel):
+    """Future feature values used by recursive GRU forecasting."""
+
+    date: str
+    temperature: float
+    fuel_price: float
+    cpi: float
+    unemployment: float
+    holiday_flag: int
 
 
 class ModelMetrics(BaseModel):
@@ -71,10 +79,9 @@ class SarimaxResult(BaseModel):
     stationarity: StationarityResult
     order: list[int]
     seasonal_order: list[int]
-    validation_metrics: ModelMetrics
+    training_metrics: ModelMetrics
     test_metrics: ModelMetrics
     history_forecast: list[ForecastPoint]
-    validation_forecast: list[ForecastPoint]
     test_forecast: list[ForecastPoint]
     future_forecast: list[ForecastPoint]
     residuals: list[float]
@@ -96,12 +103,12 @@ class GruResult(BaseModel):
     """GRU report section."""
 
     hyperparams: GruHyperparams
-    validation_metrics: ModelMetrics
+    training_metrics: ModelMetrics
     test_metrics: ModelMetrics
     history_forecast: list[ForecastPoint]
-    validation_forecast: list[ForecastPoint]
     test_forecast: list[ForecastPoint]
     future_forecast: list[ForecastPoint]
+    future_features: list[FutureFeaturePoint]
     training_losses: list[float]
 
 
