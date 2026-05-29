@@ -211,16 +211,7 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: in
         end_target_idx=split.train_end_idx,
         sequence_length=sequence_length,
     )
-    x_test, y_test = _build_window_dataset(
-        all_features,
-        all_target,
-        start_target_idx=split.train_end_idx,
-        end_target_idx=len(store_df),
-        sequence_length=sequence_length,
-    )
-
     x_train_t, y_train_t = _to_tensor_pair(x_train, y_train)
-    x_test_t, _y_test_t = _to_tensor_pair(x_test, y_test)
 
     model = GRUModel(
         input_size=len(FEATURE_COLUMNS),
@@ -237,7 +228,16 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: in
     )
 
     train_pred_scaled = _predict(model, x_train_t)
-    test_pred_scaled = _predict(model, x_test_t)
+    test_features = _with_date_features(split.test)
+    test_pred = _recursive_future_forecast(
+        model,
+        feature_df.iloc[: split.train_end_idx],
+        split.test.index,
+        test_features,
+        feature_scaler,
+        target_scaler,
+        sequence_length,
+    )
 
     future_feature_scaler = MinMaxScaler()
     future_target_scaler = MinMaxScaler()
@@ -262,7 +262,7 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: in
         hidden_size=settings.gru_hidden_size,
         num_layers=settings.gru_num_layers,
     )
-    future_epochs = max(selected_epochs, min(settings.gru_future_min_epochs, settings.gru_epochs))
+    future_epochs = selected_epochs
     _train_for_epochs(
         future_model,
         x_full_t,
@@ -292,7 +292,6 @@ def run_gru_pipeline(store_df: pd.DataFrame, split: TimeSeriesSplit, horizon: in
     )
 
     train_pred = target_scaler.inverse_transform(train_pred_scaled.reshape(-1, 1)).ravel()
-    test_pred = target_scaler.inverse_transform(test_pred_scaled.reshape(-1, 1)).ravel()
 
     training_actual = all_actual[sequence_length : split.train_end_idx]
     test_actual = all_actual[split.train_end_idx :]

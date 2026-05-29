@@ -25,7 +25,6 @@ class Settings(BaseSettings):
     gru_hidden_size: int = 64
     gru_num_layers: int = 2
     gru_epochs: int = 100
-    gru_future_min_epochs: int = 100
     gru_learning_rate: float = 0.001
     gru_sequence_length: int = 12
 
