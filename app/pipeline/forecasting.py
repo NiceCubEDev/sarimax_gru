@@ -2,10 +2,13 @@
 Shared preprocessing utilities for honest time-series evaluation.
 """
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from statsmodels.tsa.stattools import adfuller
 
 from app.config import settings
 from app.schemas.forecast import DataSplitSummary, DataValidationSummary
@@ -31,10 +34,8 @@ CONTINUOUS_FUTURE_COLUMNS = [
 @dataclass(frozen=True)
 class TimeSeriesSplit:
     train: pd.DataFrame
-    validation: pd.DataFrame
     test: pd.DataFrame
     train_end_idx: int
-    validation_end_idx: int
     summary: DataSplitSummary
 
 
@@ -88,41 +89,34 @@ def validate_store_dataframe(
 
 
 def split_time_series(df: pd.DataFrame) -> TimeSeriesSplit:
-    """Perform a chronological train/validation/test split."""
-    ratios = settings.train_ratio + settings.validation_ratio + settings.test_ratio
+    """Perform a chronological train/test split."""
+    ratios = settings.train_ratio + settings.test_ratio
     if abs(ratios - 1.0) > 1e-9:
-        raise ValueError("Train, validation and test ratios must sum to 1.0")
+        raise ValueError("Train and test ratios must sum to 1.0")
 
     total_size = len(df)
     train_size = int(total_size * settings.train_ratio)
-    validation_size = int(total_size * settings.validation_ratio)
-    test_size = total_size - train_size - validation_size
+    test_size = total_size - train_size
 
-    if min(train_size, validation_size, test_size) <= 0:
+    if min(train_size, test_size) <= 0:
         raise ValueError("Each split must contain at least one observation")
 
     train = df.iloc[:train_size].copy()
-    validation = df.iloc[train_size : train_size + validation_size].copy()
-    test = df.iloc[train_size + validation_size :].copy()
+    test = df.iloc[train_size:].copy()
 
     summary = DataSplitSummary(
         train_size=len(train),
-        validation_size=len(validation),
         test_size=len(test),
         train_start=str(train.index.min().date()),
         train_end=str(train.index.max().date()),
-        validation_start=str(validation.index.min().date()),
-        validation_end=str(validation.index.max().date()),
         test_start=str(test.index.min().date()),
         test_end=str(test.index.max().date()),
     )
 
     return TimeSeriesSplit(
         train=train,
-        validation=validation,
         test=test,
         train_end_idx=train_size,
-        validation_end_idx=train_size + validation_size,
         summary=summary,
     )
 
@@ -169,14 +163,93 @@ def is_walmart_holiday_week(date: pd.Timestamp) -> bool:
     return (normalized.year, normalized.month, normalized.day) in holiday_dates
 
 
+def _infer_differencing_order(series: pd.Series, max_diff: int = 2) -> int:
+    current = series.dropna()
+    if len(current) < 4 or current.nunique() <= 1:
+        return 0
+
+    for diff_order in range(max_diff + 1):
+        if len(current) < 4 or current.nunique() <= 1:
+            return diff_order
+        try:
+            _adf_stat, p_value, *_rest = adfuller(current, autolag="AIC")
+        except Exception:
+            return diff_order
+        if p_value <= 0.05:
+            return diff_order
+        current = current.diff().dropna()
+
+    return max_diff
+
+
+def _linear_trend_forecast(series: pd.Series, horizon: int) -> np.ndarray:
+    values = series.to_numpy(dtype=float)
+    x = np.arange(len(values), dtype=float)
+    slope, intercept = np.polyfit(x, values, deg=1)
+    future_x = np.arange(len(values), len(values) + horizon, dtype=float)
+    return slope * future_x + intercept
+
+
+def _forecast_continuous_feature(series: pd.Series, horizon: int) -> np.ndarray:
+    clean_series = series.dropna().astype(float)
+    diff_order = _infer_differencing_order(clean_series)
+    seasonal_period = settings.sarimax_seasonal_period
+    seasonal_orders = [(0, 0, 0, 0)]
+    if len(clean_series) >= seasonal_period * 2:
+        seasonal_orders.extend(
+            [
+                (1, 0, 0, seasonal_period),
+                (0, 0, 1, seasonal_period),
+            ],
+        )
+
+    candidates = [((1, diff_order, 1), seasonal_order) for seasonal_order in seasonal_orders]
+    candidates.extend(
+        [
+            ((1, diff_order, 0), (0, 0, 0, 0)),
+            ((0, diff_order, 1), (0, 0, 0, 0)),
+            ((0, diff_order, 0), (0, 0, 0, 0)),
+        ],
+    )
+
+    best_model = None
+    best_score = float("inf")
+    for order, seasonal_order in candidates:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model = SARIMAX(
+                    clean_series,
+                    order=order,
+                    seasonal_order=seasonal_order,
+                    enforce_stationarity=False,
+                    enforce_invertibility=False,
+                )
+                fitted_model = model.fit(disp=False, maxiter=100)
+        except Exception:
+            continue
+
+        if fitted_model.aic < best_score:
+            best_score = fitted_model.aic
+            best_model = fitted_model
+
+    if best_model is None:
+        forecast = _linear_trend_forecast(clean_series, horizon)
+    else:
+        forecast = best_model.forecast(steps=horizon).to_numpy(dtype=float)
+
+    if (clean_series >= 0).all():
+        forecast = np.clip(forecast, a_min=0.0, a_max=None)
+    return forecast
+
+
 def build_future_feature_frame(
     store_df: pd.DataFrame, future_dates: pd.DatetimeIndex
 ) -> pd.DataFrame:
-    """Create future non-target feature assumptions for recursive GRU forecasting."""
-    reference_window = store_df.tail(settings.gru_sequence_length)
-    future_defaults = reference_window[CONTINUOUS_FUTURE_COLUMNS].mean()
+    """Forecast future non-target features for recursive GRU forecasting."""
+    horizon = len(future_dates)
     future_df = pd.DataFrame(index=future_dates)
     for column in CONTINUOUS_FUTURE_COLUMNS:
-        future_df[column] = float(future_defaults[column])
+        future_df[column] = _forecast_continuous_feature(store_df[column], horizon)
     future_df["Holiday_Flag"] = [int(is_walmart_holiday_week(date)) for date in future_dates]
     return future_df

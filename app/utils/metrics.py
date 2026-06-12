@@ -12,7 +12,8 @@ def compute_metrics(actual: np.ndarray, predicted: np.ndarray) -> ModelMetrics:
         raise ValueError("Actual and predicted arrays must have the same shape")
 
     mae = float(np.mean(np.abs(actual_arr - predicted_arr)))
-    rmse = float(np.sqrt(np.mean((actual_arr - predicted_arr) ** 2)))
+    mse = float(np.mean((actual_arr - predicted_arr) ** 2))
+    rmse = float(np.sqrt(mse))
 
     nonzero_mask = actual_arr != 0
     if nonzero_mask.any():
@@ -50,6 +51,7 @@ def compute_metrics(actual: np.ndarray, predicted: np.ndarray) -> ModelMetrics:
 
     return ModelMetrics(
         mae=round(mae, 2),
+        mse=round(mse, 2),
         rmse=round(rmse, 2),
         mape=round(mape, 2),
         smape=round(smape, 2),

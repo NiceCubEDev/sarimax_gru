@@ -13,9 +13,8 @@ class Settings(BaseSettings):
     # --- Data ---
     csv_path: str = "data/Walmart.csv"
     reports_dir: str = "build/reports"
-    train_ratio: float = 0.7
-    validation_ratio: float = 0.15
-    test_ratio: float = 0.15
+    train_ratio: float = 0.8
+    test_ratio: float = 0.2
     random_seed: int = 42
     forecast_horizon: int = 12
 
@@ -26,7 +25,6 @@ class Settings(BaseSettings):
     gru_hidden_size: int = 64
     gru_num_layers: int = 2
     gru_epochs: int = 100
-    gru_future_min_epochs: int = 100
     gru_learning_rate: float = 0.001
     gru_sequence_length: int = 12
 
